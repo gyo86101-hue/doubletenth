@@ -1,0 +1,1381 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>超級冷氣與室外機模擬器</title>
+  <!-- 載入 Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 載入 Google Fonts 圓體與數位字型 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700;900&family=Orbitron:wght@600;800&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .lcd-font {
+      font-family: 'Orbitron', 'Noto Sans TC', monospace;
+    }
+    /* 遙控器按鍵立體按壓效果 */
+    .remote-btn {
+      transition: transform 0.08s ease, box-shadow 0.08s ease;
+      box-shadow: 0 5px 0 rgba(0, 0, 0, 0.22), 0 8px 12px rgba(0, 0, 0, 0.15);
+    }
+    .remote-btn:active {
+      transform: translateY(4px);
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.15);
+    }
+    /* 螢幕結霜邊框特效 */
+    .frost-overlay {
+      pointer-events: none;
+      box-shadow: inset 0 0 60px rgba(186, 230, 253, 0.85), inset 0 0 20px rgba(255, 255, 255, 0.9);
+      transition: opacity 0.8s ease;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-800 min-h-screen flex flex-col overflow-x-hidden">
+
+  <!-- 頂部控制列 -->
+  <header class="bg-slate-800/95 backdrop-blur border-b border-slate-700 px-4 py-3 flex flex-wrap items-center justify-between gap-3 z-20 shadow-lg">
+    <div class="flex items-center gap-2.5">
+      <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-sky-400 to-blue-600 flex items-center justify-center text-white text-2xl shadow-md">
+        ❄️
+      </div>
+      <div>
+        <h1 class="text-white font-black text-lg sm:text-xl tracking-wide leading-tight">超級冷氣模擬器</h1>
+        <p id="ac-model-badge" class="text-sky-300 text-xs font-bold">載入機型中...</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-2 sm:gap-3">
+      <!-- 音效開關 -->
+      <button id="btn-sound" class="px-3 py-2.5 rounded-2xl bg-slate-700 hover:bg-slate-600 active:scale-95 text-white font-bold text-sm flex items-center gap-1.5 transition shadow">
+        <span id="sound-icon" class="text-lg">🔊</span>
+        <span class="hidden md:inline" id="sound-label">音效開啟</span>
+      </button>
+
+      <!-- 隨機更換目前選中冷氣外觀 -->
+      <button id="btn-generate" class="px-3.5 py-2.5 rounded-2xl bg-slate-700 hover:bg-slate-600 active:scale-95 text-sky-300 border border-sky-500/40 font-black text-xs sm:text-sm flex items-center gap-1.5 transition shadow">
+        <span class="text-base">🎲</span>
+        <span>換這台外觀</span>
+      </button>
+
+      <!-- 新增冷氣按鈕 -->
+      <button id="btn-add-ac" class="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-400 via-teal-500 to-cyan-600 hover:from-emerald-300 hover:to-cyan-500 active:scale-95 text-white font-black text-sm sm:text-base flex items-center gap-1.5 transition shadow-lg shadow-emerald-500/30">
+        <span class="text-lg">➕</span>
+        <span>新增冷氣 (<span id="ac-count-badge">1/4</span>)</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 主互動區域：左側室內外場景畫布 + 右側冷氣遙控器 -->
+  <main class="flex-1 flex flex-col lg:flex-row items-stretch justify-center p-3 sm:p-5 gap-4 sm:gap-6 max-w-7xl w-full mx-auto">
+    
+    <!-- 左側：室內與室外機視覺模擬畫布容器 -->
+    <section class="relative flex-1 min-h-[420px] sm:min-h-[520px] lg:min-h-[600px] rounded-3xl overflow-hidden shadow-2xl border-4 border-slate-700 bg-amber-50 flex flex-col">
+      <!-- 畫布本體（支援點擊直接切換選取冷氣） -->
+      <canvas id="sceneCanvas" class="w-full h-full block flex-1 cursor-pointer"></canvas>
+
+      <!-- 結霜特效遮罩（急凍模式或低溫時顯示） -->
+      <div id="frost-layer" class="frost-overlay absolute inset-0 opacity-0 rounded-2xl"></div>
+
+      <!-- 左上角：室內/室外溫度計資訊卡 -->
+      <div class="absolute top-3 left-3 flex flex-wrap gap-2 pointer-events-none">
+        <div class="bg-white/90 backdrop-blur-md px-3.5 py-2 rounded-2xl shadow-md border border-slate-200 flex items-center gap-2">
+          <span class="text-xl">🏠</span>
+          <div>
+            <div class="text-[11px] font-bold text-slate-500">室內溫度</div>
+            <div id="hud-room-temp" class="text-lg font-black text-sky-600 lcd-font">30.0°C</div>
+          </div>
+        </div>
+
+        <div class="bg-amber-500/90 backdrop-blur-md px-3.5 py-2 rounded-2xl shadow-md border border-amber-300 text-white flex items-center gap-2">
+          <span class="text-xl">☀️</span>
+          <div>
+            <div class="text-[11px] font-bold text-amber-100">室外氣溫</div>
+            <div id="hud-outdoor-temp" class="text-lg font-black lcd-font">33.0°C</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部狀態提示條與快速刪除當前冷氣按鈕 -->
+      <div class="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+        <div id="hud-status-pill" class="bg-slate-900/85 backdrop-blur text-white text-xs sm:text-sm font-bold px-4 py-2 rounded-full shadow-lg flex items-center gap-2">
+          <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-slate-400"></span>
+          <span id="status-text">點擊畫面上的冷氣或用遙控器切換控制！</span>
+        </div>
+
+        <button id="btn-remove-ac" class="hidden pointer-events-auto bg-rose-600/95 hover:bg-rose-500 active:scale-95 text-white text-xs font-black px-3.5 py-2 rounded-full shadow-lg flex items-center gap-1 transition">
+          <span>🗑️</span>
+          <span>拆除這台冷氣</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 右側：實體感冷氣遙控器 -->
+    <aside class="w-full lg:w-[350px] xl:w-[380px] flex-shrink-0 flex flex-col justify-center">
+      <div class="bg-gradient-to-b from-slate-100 to-slate-300 rounded-[2.2rem] p-4 sm:p-5 shadow-2xl border-4 border-slate-400/60 relative">
+        
+        <!-- 遙控器頂部紅外線發射頭與品牌標誌 -->
+        <div class="flex items-center justify-between mb-2.5 px-2">
+          <div class="flex items-center gap-1.5">
+            <span id="ir-led" class="w-3 h-3 rounded-full bg-rose-900 transition-colors duration-100"></span>
+            <span class="text-[11px] font-bold text-slate-500 tracking-wider">MULTI-AC REMOTE</span>
+          </div>
+          <span id="remote-brand-label" class="text-xs font-black text-slate-600 tracking-widest">企鵝牌 AIR</span>
+        </div>
+
+        <!-- 機台切換選擇列 (#1, #2, #3, #4) -->
+        <div class="mb-3 bg-slate-200/90 p-1.5 rounded-2xl border border-slate-300">
+          <div class="text-[11px] font-black text-slate-500 px-1.5 mb-1 flex items-center justify-between">
+            <span>📡 選擇要遙控的冷氣：</span>
+            <span id="selected-room-tag" class="text-sky-700">#1 客廳</span>
+          </div>
+          <div id="ac-selector-tabs" class="grid grid-cols-4 gap-1.5">
+            <!-- 由 JS 動態生成機台切換按鈕 -->
+          </div>
+        </div>
+
+        <!-- 遙控器 LCD 液晶螢幕 -->
+        <div id="remote-lcd" class="rounded-2xl p-3.5 mb-4 border-4 border-slate-500 shadow-inner transition-colors duration-300 bg-[#8fa395] text-slate-900 relative overflow-hidden">
+          <!-- 螢幕反光質感 -->
+          <div class="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-white/25 pointer-events-none"></div>
+          
+          <!-- 關機時的空白液晶狀態 -->
+          <div id="lcd-off-view" class="h-24 flex flex-col items-center justify-center opacity-55">
+            <span id="lcd-off-title" class="text-xs font-black tracking-wider">#1 客廳 · STANDBY</span>
+            <span class="lcd-font text-2xl font-bold mt-1">-- °C</span>
+          </div>
+
+          <!-- 開機時的完整液晶顯示 -->
+          <div id="lcd-on-view" class="hidden h-24 flex flex-col justify-between">
+            <!-- 上排：機台編號與運轉模式 -->
+            <div class="flex items-center justify-between text-xs font-black border-b border-slate-800/20 pb-1">
+              <span id="lcd-mode" class="flex items-center gap-1">❄️ 冷氣 COOL</span>
+              <span id="lcd-swing" class="px-1.5 py-0.5 rounded bg-slate-900/15 text-[10px]">↕️ 自動擺葉</span>
+            </div>
+
+            <!-- 中排：大字體設定溫度 -->
+            <div class="flex items-baseline justify-center my-0.5">
+              <span id="lcd-unit-badge" class="text-xs font-black mr-2 px-1.5 py-0.5 rounded bg-slate-900/10">#1</span>
+              <span id="lcd-temp" class="lcd-font text-4xl sm:text-5xl font-extrabold tracking-tight">24</span>
+              <span class="lcd-font text-lg font-bold ml-1">°C</span>
+            </div>
+
+            <!-- 下排：風速格數 -->
+            <div class="flex items-center justify-between text-xs font-black pt-1 border-t border-slate-800/20">
+              <span>風速</span>
+              <div id="lcd-fan-bars" class="flex items-end gap-1">
+                <span class="w-2 h-2 bg-slate-900 rounded-xs"></span>
+                <span class="w-2 h-3 bg-slate-900 rounded-xs"></span>
+                <span class="w-2 h-4 bg-slate-900/25 rounded-xs"></span>
+                <span id="lcd-fan-text" class="ml-1.5">中風</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 遙控器按鍵區 -->
+        <div class="space-y-3">
+          
+          <!-- 第一排：單台電源開關 + 溫度上下調整 -->
+          <div class="grid grid-cols-2 gap-3 items-stretch">
+            <!-- 開/關機電源鍵 -->
+            <button id="btn-power" class="remote-btn rounded-3xl bg-gradient-to-b from-rose-500 to-red-600 text-white p-3.5 flex flex-col items-center justify-center gap-1 border-2 border-red-400">
+              <svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="2.8" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v9m6.364-6.364a9 9 0 11-12.728 0" />
+              </svg>
+              <span class="font-black text-sm sm:text-base tracking-wider">這台 開 / 關</span>
+            </button>
+
+            <!-- 溫度升降雙按鍵 -->
+            <div class="flex flex-col gap-2">
+              <button id="btn-temp-up" class="remote-btn flex-1 rounded-2xl bg-gradient-to-b from-sky-400 to-sky-500 text-white py-2 px-3 flex items-center justify-center gap-1.5 font-black text-sm sm:text-base border border-sky-300">
+                <span class="text-base">▲</span>
+                <span>溫度調高</span>
+              </button>
+              <button id="btn-temp-down" class="remote-btn flex-1 rounded-2xl bg-gradient-to-b from-blue-500 to-blue-600 text-white py-2 px-3 flex items-center justify-center gap-1.5 font-black text-sm sm:text-base border border-blue-400">
+                <span class="text-base">▼</span>
+                <span>溫度調低</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 第二排：功能切換按鍵（模式、風速、風向） -->
+          <div class="grid grid-cols-3 gap-2">
+            <button id="btn-mode" class="remote-btn rounded-2xl bg-white hover:bg-slate-50 text-slate-800 py-3 px-2 flex flex-col items-center justify-center gap-1 border border-slate-200">
+              <span class="text-lg">❄️</span>
+              <span class="font-black text-xs sm:text-sm">模式</span>
+            </button>
+
+            <button id="btn-fan" class="remote-btn rounded-2xl bg-white hover:bg-slate-50 text-slate-800 py-3 px-2 flex flex-col items-center justify-center gap-1 border border-slate-200">
+              <span class="text-lg">🌀</span>
+              <span class="font-black text-xs sm:text-sm">風速</span>
+            </button>
+
+            <button id="btn-swing" class="remote-btn rounded-2xl bg-white hover:bg-slate-50 text-slate-800 py-3 px-2 flex flex-col items-center justify-center gap-1 border border-slate-200">
+              <span class="text-lg">↕️</span>
+              <span class="font-black text-xs sm:text-sm">風向擺葉</span>
+            </button>
+          </div>
+
+          <!-- 第三排：全部同時開 / 全部同時關 總開關 -->
+          <div class="grid grid-cols-2 gap-2.5 pt-0.5">
+            <button id="btn-all-on" class="remote-btn rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white py-2.5 px-3 flex items-center justify-center gap-1.5 font-black text-xs sm:text-sm border border-emerald-300">
+              <span>⚡</span>
+              <span>全部一起開</span>
+            </button>
+            <button id="btn-all-off" class="remote-btn rounded-2xl bg-gradient-to-r from-slate-600 to-slate-700 text-white py-2.5 px-3 flex items-center justify-center gap-1.5 font-black text-xs sm:text-sm border border-slate-500">
+              <span>🛑</span>
+              <span>全部一起關</span>
+            </button>
+          </div>
+
+          <!-- 第四排：快速一鍵急凍按鈕 -->
+          <button id="btn-turbo" class="remote-btn w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 text-white py-2.5 px-4 flex items-center justify-center gap-2 font-black text-sm sm:text-base border border-cyan-300">
+            <span class="text-lg">🐧</span>
+            <span>這台超級急凍 (16°C)</span>
+          </button>
+
+        </div>
+      </div>
+    </aside>
+
+  </main>
+
+  <script>
+    /**
+     * ============================================================================
+     * 1. Web Audio API 音效合成器 (免外部音檔，純程式即時合成逼聲與多台壓縮機運轉聲)
+     * ============================================================================
+     */
+    class SoundEngine {
+      constructor() {
+        this.ctx = null;
+        this.muted = false;
+        this.fanGain = null;
+        this.compressorOsc = null;
+        this.compressorGain = null;
+      }
+
+      init() {
+        if (this.ctx) {
+          if (this.ctx.state === 'suspended') this.ctx.resume();
+          return;
+        }
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        this.ctx = new AudioCtx();
+
+        const bufferSize = this.ctx.sampleRate * 2;
+        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          output[i] = Math.random() * 2 - 1;
+        }
+
+        const whiteNoise = this.ctx.createBufferSource();
+        whiteNoise.buffer = noiseBuffer;
+        whiteNoise.loop = true;
+
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 420;
+
+        this.fanGain = this.ctx.createGain();
+        this.fanGain.gain.value = 0;
+
+        whiteNoise.connect(filter);
+        filter.connect(this.fanGain);
+        this.fanGain.connect(this.ctx.destination);
+        whiteNoise.start(0);
+
+        this.compressorOsc = this.ctx.createOscillator();
+        this.compressorOsc.type = 'sawtooth';
+        this.compressorOsc.frequency.value = 55;
+
+        const compFilter = this.ctx.createBiquadFilter();
+        compFilter.type = 'lowpass';
+        compFilter.frequency.value = 135;
+
+        this.compressorGain = this.ctx.createGain();
+        this.compressorGain.gain.value = 0;
+
+        this.compressorOsc.connect(compFilter);
+        compFilter.connect(this.compressorGain);
+        this.compressorGain.connect(this.ctx.destination);
+        this.compressorOsc.start(0);
+      }
+
+      playBeep(type = 'normal') {
+        if (this.muted) return;
+        this.init();
+
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        osc.type = 'sine';
+        if (type === 'on') {
+          osc.frequency.setValueAtTime(1760, now);
+          osc.frequency.setValueAtTime(2349, now + 0.09);
+          gain.gain.setValueAtTime(0.18, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.25);
+        } else if (type === 'all-on') {
+          // 全部啟動的華麗三連音
+          osc.frequency.setValueAtTime(1567, now);
+          osc.frequency.setValueAtTime(1975, now + 0.08);
+          osc.frequency.setValueAtTime(2637, now + 0.16);
+          gain.gain.setValueAtTime(0.2, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.35);
+        } else if (type === 'off') {
+          osc.frequency.setValueAtTime(1975, now);
+          osc.frequency.setValueAtTime(1318, now + 0.1);
+          gain.gain.setValueAtTime(0.18, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.27);
+        } else {
+          osc.frequency.setValueAtTime(2093, now);
+          gain.gain.setValueAtTime(0.14, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.12);
+        }
+      }
+
+      // 根據目前所有運轉中冷氣的總風速能量動態調整環境音效
+      updateEngineSound(activeCount, totalSpeedRatio) {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        if (this.muted || activeCount === 0) {
+          this.fanGain.gain.setTargetAtTime(0, now, 0.3);
+          this.compressorGain.gain.setTargetAtTime(0, now, 0.3);
+        } else {
+          const cappedRatio = Math.min(totalSpeedRatio, 2.2);
+          const targetFanVol = 0.015 + cappedRatio * 0.035;
+          const targetCompVol = 0.02 + cappedRatio * 0.04;
+          const targetFreq = 46 + cappedRatio * 28;
+          this.fanGain.gain.setTargetAtTime(targetFanVol, now, 0.2);
+          this.compressorGain.gain.setTargetAtTime(targetCompVol, now, 0.2);
+          this.compressorOsc.frequency.setTargetAtTime(targetFreq, now, 0.2);
+        }
+      }
+
+      toggleMute() {
+        this.muted = !this.muted;
+        if (this.muted && this.ctx) {
+          this.fanGain.gain.setValueAtTime(0, this.ctx.currentTime);
+          this.compressorGain.gain.setValueAtTime(0, this.ctx.currentTime);
+        }
+        return this.muted;
+      }
+    }
+
+    /**
+     * ============================================================================
+     * 2. 遊戲狀態與多台冷氣機型生成器
+     * ============================================================================
+     */
+    const MAX_AC_UNITS = 4;
+
+    const ROOM_LABELS = ['客廳', '兒童房', '遊戲室', '主臥室'];
+    const PIPE_COLORS = ['#ea580c', '#0284c7', '#16a34a', '#9333ea'];
+
+    const BRANDS = [
+      { name: '企鵝牌', code: 'PENGUIN' },
+      { name: '大金剛', code: 'DAIKONG' },
+      { name: '日立星', code: 'HITASTAR' },
+      { name: '冰極限', code: 'ICE-MAX' },
+      { name: '涼透透', code: 'COOL-PRO' },
+      { name: '北極熊', code: 'POLAR-X' },
+      { name: '哆啦冷', code: 'DORA-AC' }
+    ];
+
+    const AC_STYLES = [
+      {
+        styleName: '極簡變頻旗艦款',
+        indoorBody: '#ffffff',
+        indoorTrim: '#38bdf8',
+        indoorCorner: 20,
+        ledColor: '#38bdf8',
+        outdoorBody: '#f1f5f9',
+        outdoorGrille: '#1e293b',
+        bladeColor: '#0284c7',
+        dualFan: false,
+        stripe: true
+      },
+      {
+        styleName: '重裝雙風扇工業款',
+        indoorBody: '#e2e8f0',
+        indoorTrim: '#f97316',
+        indoorCorner: 10,
+        ledColor: '#fb923c',
+        outdoorBody: '#cbd5e1',
+        outdoorGrille: '#0f172a',
+        bladeColor: '#ea580c',
+        dualFan: true,
+        stripe: true
+      },
+      {
+        styleName: '粉彩夢幻兒童款',
+        indoorBody: '#fdf2f8',
+        indoorTrim: '#f472b6',
+        indoorCorner: 24,
+        ledColor: '#f472b6',
+        outdoorBody: '#fce7f3',
+        outdoorGrille: '#831843',
+        bladeColor: '#ec4899',
+        dualFan: false,
+        stripe: false
+      },
+      {
+        styleName: '未來電競黑武士款',
+        indoorBody: '#1e293b',
+        indoorTrim: '#22d3ee',
+        indoorCorner: 14,
+        ledColor: '#22d3ee',
+        outdoorBody: '#334155',
+        outdoorGrille: '#020617',
+        bladeColor: '#06b6d4',
+        dualFan: true,
+        stripe: true
+      },
+      {
+        styleName: '復古懷舊經典款',
+        indoorBody: '#fef3c7',
+        indoorTrim: '#b45309',
+        indoorCorner: 8,
+        ledColor: '#4ade80',
+        outdoorBody: '#fde68a',
+        outdoorGrille: '#451a03',
+        bladeColor: '#d97706',
+        dualFan: false,
+        stripe: true
+      }
+    ];
+
+    const MODES = [
+      { id: 'cool', label: '冷氣 COOL', icon: '❄️', color: '#38bdf8' },
+      { id: 'dry', label: '除濕 DRY', icon: '💧', color: '#a78bfa' },
+      { id: 'fan', label: '送風 FAN', icon: '🍃', color: '#34d399' },
+      { id: 'turbo', label: '急凍 TURBO', icon: '⚡', color: '#22d3ee' }
+    ];
+
+    const FAN_SPEEDS = [
+      { id: 'low', label: '弱風', bars: 1, mult: 0.55 },
+      { id: 'med', label: '中風', bars: 2, mult: 0.8 },
+      { id: 'high', label: '強風', bars: 3, mult: 1.05 },
+      { id: 'auto', label: '自動', bars: 3, mult: 0.9 }
+    ];
+
+    const state = {
+      roomTemp: 30.0,
+      outdoorTemp: 33.0,
+      units: [],             // 存放所有已生成的冷氣機組物件
+      selectedIndex: 0,      // 目前遙控器正在控制的機台索引
+      airParticles: [],      // 室內冷氣氣流粒子
+      heatParticles: [],     // 室外機散熱熱氣粒子
+      penguinX: -120,        // 急凍模式彩蛋小企鵝位置
+      penguinDir: 1
+    };
+
+    const sound = new SoundEngine();
+
+    // 隨機產生一組外觀規格
+    function createRandomHardwareSpec(forcedStyleIndex = null) {
+      const brand = BRANDS[Math.floor(Math.random() * BRANDS.length)];
+      const styleIdx = forcedStyleIndex !== null ? forcedStyleIndex : Math.floor(Math.random() * AC_STYLES.length);
+      const style = AC_STYLES[styleIdx];
+      const isDualFan = Math.random() < 0.45 ? true : style.dualFan;
+      const horsepower = isDualFan ? '雙扇旗艦' : '變頻單扇';
+
+      return {
+        ...style,
+        brandName: brand.name,
+        brandCode: brand.code,
+        dualFan: isDualFan,
+        specText: `${brand.name} · ${style.styleName} (${horsepower})`
+      };
+    }
+
+    // 建立一台全新的冷氣（室內機 + 室外機配對）
+    function createACUnit(index) {
+      const roomName = ROOM_LABELS[index % ROOM_LABELS.length];
+      const pipeColor = PIPE_COLORS[index % PIPE_COLORS.length];
+      return {
+        id: Date.now() + Math.random(),
+        roomName,
+        pipeColor,
+        isOn: false,
+        targetTemp: 24,
+        modeIndex: 0,
+        fanIndex: 1,
+        swing: true,
+        config: createRandomHardwareSpec(),
+        // 個別機台的物理動畫狀態
+        flapAngle: 0,
+        swingPhase: Math.random() * Math.PI,
+        fanAngle: Math.random() * Math.PI * 2,
+        fanVelocity: 0,
+        pipeFlowOffset: 0,
+        // 畫面點擊判定區域（每幀更新）
+        indoorBounds: { x: 0, y: 0, w: 0, h: 0 },
+        outdoorBounds: { x: 0, y: 0, w: 0, h: 0 }
+      };
+    }
+
+    // 新增一台冷氣到場景中
+    function addNewACUnit() {
+      if (state.units.length >= MAX_AC_UNITS) {
+        sound.playBeep('off');
+        return;
+      }
+      const newIndex = state.units.length;
+      const newUnit = createACUnit(newIndex);
+      state.units.push(newUnit);
+      state.selectedIndex = newIndex;
+      sound.playBeep('on');
+      updateRemoteUI();
+    }
+
+    // 拆除目前選中的冷氣（至少保留 1 台）
+    function removeSelectedACUnit() {
+      if (state.units.length <= 1) return;
+      state.units.splice(state.selectedIndex, 1);
+      // 重新整理房間名稱與管線顏色對應，維持整齊編號
+      state.units.forEach((u, idx) => {
+        u.roomName = ROOM_LABELS[idx % ROOM_LABELS.length];
+        u.pipeColor = PIPE_COLORS[idx % PIPE_COLORS.length];
+      });
+      state.selectedIndex = Math.min(state.selectedIndex, state.units.length - 1);
+      sound.playBeep('off');
+      updateRemoteUI();
+    }
+
+    // 隨機更換目前選中冷氣的外觀
+    function regenerateSelectedUnitLook() {
+      const unit = state.units[state.selectedIndex];
+      if (!unit) return;
+      unit.config = createRandomHardwareSpec();
+      sound.playBeep('on');
+      updateRemoteUI();
+    }
+
+    /**
+     * ============================================================================
+     * 3. 遙控器 UI 狀態更新與按鍵綁定
+     * ============================================================================
+     */
+    function flashRemoteIR() {
+      const led = document.getElementById('ir-led');
+      led.classList.remove('bg-rose-900');
+      led.classList.add('bg-rose-400', 'shadow-[0_0_10px_#fb7185]');
+      setTimeout(() => {
+        led.classList.remove('bg-rose-400', 'shadow-[0_0_10px_#fb7185]');
+        led.classList.add('bg-rose-900');
+      }, 150);
+    }
+
+    function renderSelectorTabs() {
+      const container = document.getElementById('ac-selector-tabs');
+      container.innerHTML = '';
+
+      state.units.forEach((unit, idx) => {
+        const isSelected = idx === state.selectedIndex;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = isSelected
+          ? 'py-1.5 px-1 rounded-xl bg-sky-600 text-white font-black text-xs shadow-md border-2 border-sky-300 flex flex-col items-center justify-center transition transform scale-[1.03]'
+          : 'py-1.5 px-1 rounded-xl bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs border border-slate-300 flex flex-col items-center justify-center transition';
+
+        const statusIndicator = unit.isOn ? '🟢' : '⚪';
+        btn.innerHTML = `
+          <span class="leading-tight">${statusIndicator} #${idx + 1}</span>
+          <span class="text-[10px] truncate max-w-full opacity-90">${unit.roomName}</span>
+        `;
+        btn.addEventListener('click', () => {
+          state.selectedIndex = idx;
+          sound.playBeep('normal');
+          flashRemoteIR();
+          updateRemoteUI();
+        });
+        container.appendChild(btn);
+      });
+    }
+
+    function updateRemoteUI() {
+      const unit = state.units[state.selectedIndex];
+      if (!unit) return;
+
+      // 更新頂部按鈕數量與標題資訊
+      document.getElementById('ac-count-badge').textContent = `${state.units.length}/${MAX_AC_UNITS}`;
+      const addBtn = document.getElementById('btn-add-ac');
+      if (state.units.length >= MAX_AC_UNITS) {
+        addBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      } else {
+        addBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+
+      const removeBtn = document.getElementById('btn-remove-ac');
+      if (state.units.length > 1) {
+        removeBtn.classList.remove('hidden');
+      } else {
+        removeBtn.classList.add('hidden');
+      }
+
+      document.getElementById('ac-model-badge').textContent = `#${state.selectedIndex + 1} ${unit.roomName} · ${unit.config.specText}`;
+      document.getElementById('remote-brand-label').textContent = `${unit.config.brandName} AIR`;
+      document.getElementById('selected-room-tag').textContent = `#${state.selectedIndex + 1} ${unit.roomName}`;
+
+      renderSelectorTabs();
+
+      const lcd = document.getElementById('remote-lcd');
+      const offView = document.getElementById('lcd-off-view');
+      const onView = document.getElementById('lcd-on-view');
+      const statusDot = document.getElementById('status-dot');
+      const statusText = document.getElementById('status-text');
+
+      const runningUnitsCount = state.units.filter(u => u.isOn).length;
+
+      if (!unit.isOn) {
+        lcd.classList.remove('bg-[#a7f3d0]', 'shadow-[0_0_20px_rgba(52,211,153,0.35)]');
+        lcd.classList.add('bg-[#8fa395]');
+        offView.classList.remove('hidden');
+        onView.classList.add('hidden');
+        document.getElementById('lcd-off-title').textContent = `#${state.selectedIndex + 1} ${unit.roomName} · STANDBY`;
+      } else {
+        lcd.classList.remove('bg-[#8fa395]');
+        lcd.classList.add('bg-[#a7f3d0]', 'shadow-[0_0_20px_rgba(52,211,153,0.35)]');
+        offView.classList.add('hidden');
+        onView.classList.remove('hidden');
+
+        const currentMode = MODES[unit.modeIndex];
+        const currentFan = FAN_SPEEDS[unit.fanIndex];
+
+        document.getElementById('lcd-mode').textContent = `${currentMode.icon} ${currentMode.label}`;
+        document.getElementById('lcd-unit-badge').textContent = `#${state.selectedIndex + 1} ${unit.roomName}`;
+        document.getElementById('lcd-temp').textContent = unit.targetTemp;
+        document.getElementById('lcd-swing').textContent = unit.swing ? '↕️ 自動擺葉' : '➡️ 固定風向';
+        document.getElementById('lcd-fan-text').textContent = currentFan.label;
+
+        const barsContainer = document.getElementById('lcd-fan-bars');
+        const barSpans = barsContainer.querySelectorAll('span');
+        barSpans.forEach((bar, idx) => {
+          if (idx < currentFan.bars) {
+            bar.classList.remove('bg-slate-900/25');
+            bar.classList.add('bg-slate-900');
+          } else {
+            bar.classList.remove('bg-slate-900');
+            bar.classList.add('bg-slate-900/25');
+          }
+        });
+      }
+
+      if (runningUnitsCount === 0) {
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-400';
+        statusText.textContent = `目前共 ${state.units.length} 台冷氣待機中（點擊畫面冷氣可切換遙控）`;
+      } else {
+        statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping';
+        statusText.textContent = `正在運轉 ${runningUnitsCount}/${state.units.length} 台冷氣！目前控制：#${state.selectedIndex + 1} ${unit.roomName}`;
+      }
+    }
+
+    // 綁定按鈕事件
+    document.getElementById('btn-add-ac').addEventListener('click', () => {
+      addNewACUnit();
+      flashRemoteIR();
+    });
+
+    document.getElementById('btn-remove-ac').addEventListener('click', () => {
+      removeSelectedACUnit();
+    });
+
+    document.getElementById('btn-power').addEventListener('click', () => {
+      const unit = state.units[state.selectedIndex];
+      if (!unit) return;
+      unit.isOn = !unit.isOn;
+      sound.playBeep(unit.isOn ? 'on' : 'off');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-all-on').addEventListener('click', () => {
+      state.units.forEach(u => { u.isOn = true; });
+      sound.playBeep('all-on');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-all-off').addEventListener('click', () => {
+      state.units.forEach(u => { u.isOn = false; });
+      sound.playBeep('off');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-temp-up').addEventListener('click', () => {
+      const unit = state.units[state.selectedIndex];
+      if (!unit || !unit.isOn) return;
+      if (unit.targetTemp < 30) unit.targetTemp++;
+      sound.playBeep('normal');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-temp-down').addEventListener('click', () => {
+      const unit = state.units[state.selectedIndex];
+      if (!unit || !unit.isOn) return;
+      if (unit.targetTemp > 16) unit.targetTemp--;
+      sound.playBeep('normal');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-mode').addEventListener('click', () => {
+      const unit = state.units[state.selectedIndex];
+      if (!unit || !unit.isOn) return;
+      unit.modeIndex = (unit.modeIndex + 1) % MODES.length;
+      if (MODES[unit.modeIndex].id === 'turbo') {
+        unit.targetTemp = 16;
+        unit.fanIndex = 2;
+      }
+      sound.playBeep('normal');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-fan').addEventListener('click', () => {
+      const unit = state.units[state.selectedIndex];
+      if (!unit || !unit.isOn) return;
+      unit.fanIndex = (unit.fanIndex + 1) % FAN_SPEEDS.length;
+      sound.playBeep('normal');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-swing').addEventListener('click', () => {
+      const unit = state.units[state.selectedIndex];
+      if (!unit || !unit.isOn) return;
+      unit.swing = !unit.swing;
+      sound.playBeep('normal');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-turbo').addEventListener('click', () => {
+      const unit = state.units[state.selectedIndex];
+      if (!unit) return;
+      unit.isOn = true;
+      unit.modeIndex = 3;
+      unit.targetTemp = 16;
+      unit.fanIndex = 2;
+      sound.playBeep('on');
+      flashRemoteIR();
+      updateRemoteUI();
+    });
+
+    document.getElementById('btn-generate').addEventListener('click', () => {
+      regenerateSelectedUnitLook();
+      flashRemoteIR();
+    });
+
+    document.getElementById('btn-sound').addEventListener('click', () => {
+      const isMuted = sound.toggleMute();
+      document.getElementById('sound-icon').textContent = isMuted ? '🔇' : '🔊';
+      document.getElementById('sound-label').textContent = isMuted ? '已靜音' : '音效開啟';
+    });
+
+    /**
+     * ============================================================================
+     * 4. HTML5 Canvas 多台室內機、室外機與配對銅管物理繪製引擎
+     * ============================================================================
+     */
+    const canvas = document.getElementById('sceneCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // 點擊畫布直接選取對應的冷氣（點擊室內機或室外機都可以！）
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      for (let i = state.units.length - 1; i >= 0; i--) {
+        const u = state.units[i];
+        const inIndoor =
+          clickX >= u.indoorBounds.x - 8 &&
+          clickX <= u.indoorBounds.x + u.indoorBounds.w + 8 &&
+          clickY >= u.indoorBounds.y - 16 &&
+          clickY <= u.indoorBounds.y + u.indoorBounds.h + 12;
+
+        const inOutdoor =
+          clickX >= u.outdoorBounds.x - 8 &&
+          clickX <= u.outdoorBounds.x + u.outdoorBounds.w + 8 &&
+          clickY >= u.outdoorBounds.y - 16 &&
+          clickY <= u.outdoorBounds.y + u.outdoorBounds.h + 12;
+
+        if (inIndoor || inOutdoor) {
+          state.selectedIndex = i;
+          sound.playBeep('normal');
+          updateRemoteUI();
+          break;
+        }
+      }
+    });
+
+    function resizeCanvas() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    function drawRoundRect(x, y, w, h, r) {
+      const radius = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + w - radius, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+      ctx.lineTo(x + w, y + h - radius);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+      ctx.lineTo(x + radius, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+
+    function drawFanBlades(cx, cy, radius, angle, bladeColor) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+
+      ctx.fillStyle = bladeColor;
+      for (let i = 0; i < 3; i++) {
+        ctx.rotate((Math.PI * 2) / 3);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.bezierCurveTo(radius * 0.4, -radius * 0.45, radius * 0.95, -radius * 0.25, radius * 0.88, radius * 0.2);
+        ctx.bezierCurveTo(radius * 0.65, radius * 0.45, radius * 0.25, radius * 0.25, 0, 0);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = '#334155';
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawPenguin(x, floorY) {
+      ctx.save();
+      ctx.translate(x, floorY);
+      if (state.penguinDir < 0) ctx.scale(-1, 1);
+
+      ctx.fillStyle = '#1e293b';
+      ctx.beginPath();
+      ctx.ellipse(0, -24, 18, 24, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(4, -22, 12, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.moveTo(15, -34);
+      ctx.lineTo(25, -31);
+      ctx.lineTo(15, -28);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.arc(10, -37, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(-12, -26);
+      ctx.lineTo(14, -26);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    // 繪製機台編號標籤徽章 (#1 客廳 等)
+    function drawUnitBadge(x, y, text, color, isSelected) {
+      ctx.save();
+      ctx.font = 'bold 11px "Noto Sans TC", sans-serif';
+      const textW = ctx.measureText(text).width;
+      const badgeW = textW + 16;
+      const badgeH = 20;
+
+      ctx.fillStyle = isSelected ? '#0284c7' : color;
+      drawRoundRect(x, y, badgeW, badgeH, 10);
+      ctx.fill();
+
+      if (isSelected) {
+        ctx.strokeStyle = '#fde047';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(text, x + 8, y + 14);
+      ctx.restore();
+    }
+
+    let lastTime = performance.now();
+    function animate(now) {
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      const count = state.units.length;
+
+      // 1. 更新所有冷氣機台的物理狀態與總冷房能力
+      let activeCoolingUnits = 0;
+      let weightedTargetTempSum = 0;
+      let totalCoolingPower = 0;
+      let totalFanSpeedRatio = 0;
+      let anyFreezing = false;
+
+      state.units.forEach((unit) => {
+        const currentMode = MODES[unit.modeIndex];
+        const currentFan = FAN_SPEEDS[unit.fanIndex];
+
+        // 導風板開合動畫
+        const targetFlap = unit.isOn ? 1 : 0;
+        unit.flapAngle += (targetFlap - unit.flapAngle) * dt * 4.5;
+        if (unit.isOn && unit.swing) {
+          unit.swingPhase += dt * 2.5;
+        }
+
+        // 計算室外機目標轉速
+        const needCompressor = unit.isOn && currentMode.id !== 'fan';
+        let targetVel = 0;
+        if (needCompressor) {
+          const tempFactor = (31 - unit.targetTemp) / 15;
+          const turboBoost = currentMode.id === 'turbo' ? 1.45 : 1.0;
+          targetVel = (7 + tempFactor * 14) * currentFan.mult * turboBoost;
+
+          activeCoolingUnits++;
+          weightedTargetTempSum += unit.targetTemp;
+          totalCoolingPower += (0.1 + (currentMode.id === 'turbo' ? 0.22 : 0.07)) * currentFan.mult;
+        }
+
+        if (unit.isOn && (currentMode.id === 'turbo' || unit.targetTemp <= 18)) {
+          anyFreezing = true;
+        }
+
+        // 風扇慣性加減速
+        const accel = needCompressor ? 3.5 : 1.1;
+        unit.fanVelocity += (targetVel - unit.fanVelocity) * dt * accel;
+        if (unit.fanVelocity < 0.02) unit.fanVelocity = 0;
+        unit.fanAngle += unit.fanVelocity * dt;
+        unit.pipeFlowOffset -= unit.fanVelocity * dt * 12;
+
+        totalFanSpeedRatio += Math.min(unit.fanVelocity / 24, 1);
+      });
+
+      // 更新環境音效
+      sound.updateEngineSound(activeCoolingUnits > 0 ? 1 : 0, totalFanSpeedRatio);
+
+      // 室內溫度動態變化（開越多台冷氣，降溫速度越快！）
+      if (activeCoolingUnits > 0) {
+        const avgTargetTemp = weightedTargetTempSum / activeCoolingUnits;
+        if (state.roomTemp > avgTargetTemp) {
+          state.roomTemp = Math.max(avgTargetTemp, state.roomTemp - totalCoolingPower * dt * 3.8);
+        } else if (state.roomTemp < avgTargetTemp) {
+          state.roomTemp += 0.14 * dt;
+        }
+      } else {
+        if (state.roomTemp < state.outdoorTemp) {
+          state.roomTemp = Math.min(state.outdoorTemp, state.roomTemp + 0.12 * dt * 3);
+        }
+      }
+      document.getElementById('hud-room-temp').textContent = `${state.roomTemp.toFixed(1)}°C`;
+
+      // 結霜特效（多台同時吹或開急凍或室溫低於20度）
+      const showFrost = anyFreezing || state.roomTemp < 20.5;
+      document.getElementById('frost-layer').style.opacity = showFrost ? '1' : '0';
+
+      // 2. 開始繪製場景
+      ctx.clearRect(0, 0, w, h);
+
+      const splitX = Math.floor(w * 0.54);
+      const floorY = h - 36;
+
+      // 室內牆面背景
+      const wallGrad = ctx.createLinearGradient(0, 0, 0, floorY);
+      wallGrad.addColorStop(0, '#fef9c3');
+      wallGrad.addColorStop(1, '#fde68a');
+      ctx.fillStyle = wallGrad;
+      ctx.fillRect(0, 0, splitX, floorY);
+
+      // 木地板
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(0, floorY, w, h - floorY);
+      ctx.fillStyle = '#92400e';
+      ctx.fillRect(0, floorY, w, 5);
+
+      // 室外天空與窗景
+      const skyGrad = ctx.createLinearGradient(splitX, 0, splitX, floorY);
+      skyGrad.addColorStop(0, '#38bdf8');
+      skyGrad.addColorStop(0.65, '#bae6fd');
+      skyGrad.addColorStop(1, '#fef08a');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(splitX, 0, w - splitX, floorY);
+
+      // 太陽
+      const sunX = w - 58;
+      const sunY = 66;
+      ctx.fillStyle = 'rgba(253, 224, 71, 0.35)';
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, 42 + Math.sin(now * 0.003) * 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#facc15';
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, 24, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 窗框分隔柱
+      ctx.fillStyle = '#64748b';
+      ctx.fillRect(splitX - 6, 0, 12, floorY);
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillRect(splitX - 3, 0, 6, floorY);
+
+      // 3. 計算每台冷氣的版面座標（支援 1~4 台自動排版）
+      const topMargin = 68;
+      const bottomMargin = 48;
+      const availH = Math.max(220, floorY - topMargin - bottomMargin);
+
+      // 決定室內機與室外機的網格排列方式
+      // 1~2台：垂直排列；3~4台：2欄網格排列，讓每台都夠大好點擊！
+      const useTwoColsIndoor = count >= 3 && splitX >= 250;
+      const indoorCols = useTwoColsIndoor ? 2 : 1;
+      const indoorRows = Math.ceil(count / indoorCols);
+
+      const useTwoColsOutdoor = count >= 3 && (w - splitX) >= 220;
+      const outdoorCols = useTwoColsOutdoor ? 2 : 1;
+      const outdoorRows = Math.ceil(count / outdoorCols);
+
+      // 先繪製所有冷媒銅管（放在機體下層，線條更乾淨）
+      state.units.forEach((unit, idx) => {
+        const iCol = idx % indoorCols;
+        const iRow = Math.floor(idx / indoorCols);
+        const cellW = (splitX - 24) / indoorCols;
+        const cellH = availH / indoorRows;
+
+        const indoorW = Math.min(cellW - 14, count === 1 ? 260 : 210);
+        const indoorH = Math.min(Math.max(58, indoorW * 0.34), cellH - 28);
+        const indoorX = 12 + iCol * cellW + (cellW - indoorW) / 2;
+        const indoorY = topMargin + iRow * cellH + Math.min(18, (cellH - indoorH) * 0.35);
+
+        const oCol = idx % outdoorCols;
+        const oRow = Math.floor(idx / outdoorCols);
+        const oCellW = (w - splitX - 20) / outdoorCols;
+        const oCellH = availH / outdoorRows;
+
+        const outW = Math.min(oCellW - 14, count === 1 ? 225 : 175);
+        const baseRatio = unit.config.dualFan ? 0.68 : 0.56;
+        const outH = Math.min(Math.max(76, outW * baseRatio), oCellH - 24);
+        const outX = splitX + 10 + oCol * oCellW + (oCellW - outW) / 2;
+        const outY = topMargin + 22 + oRow * oCellH + (oCellH - outH) / 2;
+
+        unit.indoorBounds = { x: indoorX, y: indoorY, w: indoorW, h: indoorH };
+        unit.outdoorBounds = { x: outX, y: outY, w: outW, h: outH };
+
+        // 專屬走線槽 X 偏移，避免多條管線完全重疊
+        const channelOffset = (idx - (count - 1) / 2) * 7;
+        const pipeTurnX = splitX + 12 + channelOffset;
+
+        ctx.save();
+        ctx.strokeStyle = unit.pipeColor;
+        ctx.lineWidth = count >= 3 ? 5 : 7;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(indoorX + indoorW - 10, indoorY + indoorH * 0.65);
+        ctx.lineTo(pipeTurnX, indoorY + indoorH * 0.65);
+        ctx.lineTo(pipeTurnX, outY + outH * 0.6);
+        ctx.lineTo(outX + 8, outY + outH * 0.6);
+        ctx.stroke();
+
+        // 冷媒流動虛線
+        if (unit.fanVelocity > 0.5) {
+          ctx.strokeStyle = '#e0f2fe';
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([7, 9]);
+          ctx.lineDashOffset = unit.pipeFlowOffset;
+          ctx.stroke();
+        }
+        ctx.restore();
+      });
+
+      // 4. 繪製每一台室內機與室外機
+      state.units.forEach((unit, idx) => {
+        const cfg = unit.config;
+        const isSelected = idx === state.selectedIndex;
+        const currentFan = FAN_SPEEDS[unit.fanIndex];
+        const isUnitFreezing = unit.isOn && (MODES[unit.modeIndex].id === 'turbo' || unit.targetTemp <= 18);
+
+        const { x: indoorX, y: indoorY, w: indoorW, h: indoorH } = unit.indoorBounds;
+        const { x: outX, y: outY, w: outW, h: outH } = unit.outdoorBounds;
+
+        // --- 繪製室內機 ---
+        ctx.save();
+        ctx.shadowColor = isSelected ? 'rgba(14, 165, 233, 0.55)' : 'rgba(0, 0, 0, 0.16)';
+        ctx.shadowBlur = isSelected ? 18 : 10;
+        ctx.shadowOffsetY = 5;
+
+        ctx.fillStyle = cfg.indoorBody;
+        drawRoundRect(indoorX, indoorY, indoorW, indoorH, cfg.indoorCorner);
+        ctx.fill();
+        ctx.restore();
+
+        // 選中發光外框
+        ctx.strokeStyle = isSelected ? '#0284c7' : '#94a3b8';
+        ctx.lineWidth = isSelected ? 3.5 : 1.8;
+        drawRoundRect(indoorX, indoorY, indoorW, indoorH, cfg.indoorCorner);
+        ctx.stroke();
+
+        // 裝飾色帶
+        if (cfg.stripe) {
+          ctx.fillStyle = cfg.indoorTrim;
+          ctx.fillRect(indoorX + 6, indoorY + indoorH * 0.52, indoorW - 12, 4);
+        }
+
+        // 品牌名稱
+        ctx.fillStyle = cfg.indoorBody === '#1e293b' ? '#f8fafc' : '#334155';
+        ctx.font = `bold ${count >= 3 ? 10 : 12}px "Noto Sans TC", sans-serif`;
+        ctx.fillText(cfg.brandName, indoorX + 12, indoorY + (count >= 3 ? 18 : 22));
+
+        // 室內機 LED 溫度顯示窗
+        const ledW = count >= 3 ? 40 : 48;
+        const ledH = count >= 3 ? 20 : 24;
+        const ledX = indoorX + indoorW - ledW - 10;
+        const ledY = indoorY + 8;
+        ctx.fillStyle = '#0f172a';
+        drawRoundRect(ledX, ledY, ledW, ledH, 5);
+        ctx.fill();
+
+        if (unit.isOn) {
+          ctx.fillStyle = cfg.ledColor;
+          ctx.font = `bold ${count >= 3 ? 11 : 13}px "Orbitron", monospace`;
+          ctx.textAlign = 'center';
+          ctx.fillText(`${unit.targetTemp}°`, ledX + ledW / 2, ledY + (count >= 3 ? 14 : 17));
+          ctx.textAlign = 'left';
+        }
+
+        // 室內機出風口與可動導風板
+        const ventX = indoorX + 10;
+        const ventY = indoorY + indoorH - 13;
+        const ventW = indoorW - 20;
+        ctx.fillStyle = '#1e293b';
+        drawRoundRect(ventX, ventY, ventW, 9, 4);
+        ctx.fill();
+
+        const swingOffset = unit.swing ? Math.sin(unit.swingPhase) * 0.25 : 0;
+        const flapOpenOffset = unit.flapAngle * (8 + swingOffset * 10);
+        ctx.fillStyle = cfg.indoorTrim;
+        drawRoundRect(ventX + 2, ventY + flapOpenOffset, ventW - 4, 5, 3);
+        ctx.fill();
+
+        // 室內機編號徽章
+        drawUnitBadge(indoorX + 4, indoorY - 14, `#${idx + 1} ${unit.roomName}`, unit.pipeColor, isSelected);
+
+        // 生成室內冷氣粒子
+        if (unit.isOn && unit.flapAngle > 0.4 && Math.random() < (0.38 * currentFan.mult) / Math.sqrt(count)) {
+          state.airParticles.push({
+            x: ventX + 10 + Math.random() * (ventW - 20),
+            y: ventY + 11,
+            vx: (Math.random() - 0.35) * 30,
+            vy: (65 + Math.random() * 55) * currentFan.mult,
+            life: 1.0,
+            size: (count >= 3 ? 2.5 : 3.5) + Math.random() * 3,
+            freezing: isUnitFreezing
+          });
+        }
+
+        // --- 繪製室外機 ---
+        // 牆面 L 型安裝托架
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(outX + 12, outY + outH - 2, 8, 12);
+        ctx.fillRect(outX + outW - 20, outY + outH - 2, 8, 12);
+        ctx.fillRect(outX + 6, outY + outH + 6, outW - 12, 5);
+
+        const shakeX = unit.fanVelocity > 12 ? (Math.random() - 0.5) * 2.0 : 0;
+        const shakeY = unit.fanVelocity > 12 ? (Math.random() - 0.5) * 2.0 : 0;
+
+        ctx.save();
+        ctx.translate(shakeX, shakeY);
+
+        ctx.shadowColor = isSelected ? 'rgba(14, 165, 233, 0.55)' : 'rgba(0,0,0,0.22)';
+        ctx.shadowBlur = isSelected ? 16 : 10;
+        ctx.shadowOffsetY = 5;
+        ctx.fillStyle = cfg.outdoorBody;
+        drawRoundRect(outX, outY, outW, outH, 10);
+        ctx.fill();
+        ctx.shadowColor = 'transparent';
+
+        ctx.strokeStyle = isSelected ? '#0284c7' : '#64748b';
+        ctx.lineWidth = isSelected ? 3.5 : 2;
+        drawRoundRect(outX, outY, outW, outH, 10);
+        ctx.stroke();
+
+        // 右側壓縮機機艙蓋板
+        const compPanelW = outW * 0.28;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.08)';
+        ctx.fillRect(outX + outW - compPanelW, outY + 5, compPanelW - 5, outH - 10);
+        ctx.fillStyle = '#334155';
+        ctx.font = 'bold 9px "Noto Sans TC", sans-serif';
+        ctx.fillText(cfg.brandName, outX + outW - compPanelW + 4, outY + 18);
+
+        // 室外機大風扇護網與旋轉葉片
+        const fanAreaW = outW - compPanelW;
+        if (cfg.dualFan) {
+          const r = Math.min(fanAreaW * 0.36, outH * 0.21);
+          const cx = outX + fanAreaW * 0.52;
+          const cy1 = outY + outH * 0.28;
+          const cy2 = outY + outH * 0.72;
+
+          [cy1, cy2].forEach((cy, fIdx) => {
+            ctx.fillStyle = cfg.outdoorGrille;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fill();
+
+            drawFanBlades(cx, cy, r * 0.92, unit.fanAngle * (fIdx === 1 ? -1 : 1), cfg.bladeColor);
+
+            ctx.strokeStyle = '#94a3b8';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r * 0.62, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.stroke();
+          });
+        } else {
+          const r = Math.min(fanAreaW * 0.42, outH * 0.41);
+          const cx = outX + fanAreaW * 0.52;
+          const cy = outY + outH * 0.5;
+
+          ctx.fillStyle = cfg.outdoorGrille;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fill();
+
+          drawFanBlades(cx, cy, r * 0.92, unit.fanAngle, cfg.bladeColor);
+
+          ctx.strokeStyle = '#94a3b8';
+          ctx.lineWidth = 1.2;
+          [0.45, 0.75, 1.0].forEach(scale => {
+            ctx.beginPath();
+            ctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
+            ctx.stroke();
+          });
+        }
+
+        ctx.restore();
+
+        // 室外機編號徽章
+        drawUnitBadge(outX + 4, outY - 14, `#${idx + 1} 室外機`, unit.pipeColor, isSelected);
+
+        // 室外機散熱熱浪粒子
+        if (unit.fanVelocity > 4 && Math.random() < 0.28 / Math.sqrt(count)) {
+          state.heatParticles.push({
+            x: outX + outW * 0.35,
+            y: outY + 15 + Math.random() * (outH - 30),
+            vx: 40 + unit.fanVelocity * 3.5,
+            vy: -12 - Math.random() * 20,
+            life: 1.0
+          });
+        }
+      });
+
+      // 5. 更新並繪製冷氣氣流粒子
+      for (let i = state.airParticles.length - 1; i >= 0; i--) {
+        const p = state.airParticles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt * 0.85;
+        if (p.life <= 0 || p.y > floorY - 8) {
+          state.airParticles.splice(i, 1);
+          continue;
+        }
+        ctx.fillStyle = p.freezing
+          ? `rgba(186, 230, 253, ${p.life * 0.85})`
+          : `rgba(56, 189, 248, ${p.life * 0.7})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 6. 更新並繪製室外散熱熱浪粒子
+      for (let i = state.heatParticles.length - 1; i >= 0; i--) {
+        const hp = state.heatParticles[i];
+        hp.x += hp.vx * dt;
+        hp.y += hp.vy * dt;
+        hp.life -= dt * 1.1;
+        if (hp.life <= 0) {
+          state.heatParticles.splice(i, 1);
+          continue;
+        }
+        ctx.strokeStyle = `rgba(251, 146, 60, ${hp.life * 0.55})`;
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(hp.x, hp.y);
+        ctx.quadraticCurveTo(hp.x + 9, hp.y - 5, hp.x + 18, hp.y);
+        ctx.stroke();
+      }
+
+      // 7. 急凍或低溫彩蛋：小企鵝在室內地板滑行
+      if (showFrost) {
+        state.penguinX += state.penguinDir * 75 * dt;
+        if (state.penguinX > splitX - 30) state.penguinDir = -1;
+        if (state.penguinX < 35) state.penguinDir = 1;
+        drawPenguin(state.penguinX, floorY);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // 啟動初始化
+    window.onload = function () {
+      resizeCanvas();
+      // 預設先生成第 1 台冷氣
+      state.units = [createACUnit(0)];
+      state.selectedIndex = 0;
+      updateRemoteUI();
+      requestAnimationFrame(animate);
+    };
+  </script>
+</body>
+</html>
